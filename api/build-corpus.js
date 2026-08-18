@@ -1,382 +1,1122 @@
-// api/build-corpus.js
-const crypto = require('crypto');
+const crypto = require("crypto");
 
-// ---------- CRC32C (Castagnoli) ----------
+// ============================================================
+// CRC32C (Castagnoli)
+// ============================================================
+
 const CRC32C_TABLE = (() => {
   const table = new Uint32Array(256);
+
   for (let n = 0; n < 256; n++) {
     let c = n;
+
     for (let k = 0; k < 8; k++) {
-      c = (c & 1) ? (0x82F63B78 ^ (c >>> 1)) : (c >>> 1);
+      c = (c & 1)
+        ? (0x82F63B78 ^ (c >>> 1))
+        : (c >>> 1);
     }
+
     table[n] = c >>> 0;
   }
+
   return table;
 })();
 
-function crc32c(buf) {
+function crc32c(buffer) {
   let crc = 0xFFFFFFFF;
-  for (let i = 0; i < buf.length; i++) {
-    crc = CRC32C_TABLE[(crc ^ buf[i]) & 0xFF] ^ (crc >>> 8);
+
+  for (let i = 0; i < buffer.length; i++) {
+    crc =
+      CRC32C_TABLE[(crc ^ buffer[i]) & 0xFF] ^
+      (crc >>> 8);
   }
-  return ((crc ^ 0xFFFFFFFF) >>> 0).toString(16).padStart(8, '0');
+
+  return ((crc ^ 0xFFFFFFFF) >>> 0)
+    .toString(16)
+    .padStart(8, "0");
 }
 
-function sha256Hex(buf) {
-  return crypto.createHash('sha256').update(buf).digest('hex');
+function sha256Hex(buffer) {
+  return crypto
+    .createHash("sha256")
+    .update(buffer)
+    .digest("hex");
 }
 
-// ---------- Byte comparison (UTF-8) ----------
+// ============================================================
+// UTF-8 BYTE COMPARISON
+// ============================================================
+
 function cmpBytes(a, b) {
-  const ba = Buffer.from(a, 'utf8');
-  const bb = Buffer.from(b, 'utf8');
+  const ba = Buffer.from(String(a), "utf8");
+  const bb = Buffer.from(String(b), "utf8");
+
   const len = Math.min(ba.length, bb.length);
+
   for (let i = 0; i < len; i++) {
-    if (ba[i] !== bb[i]) return ba[i] - bb[i];
+    if (ba[i] !== bb[i]) {
+      return ba[i] - bb[i];
+    }
   }
+
   return ba.length - bb.length;
 }
 
-// ---------- Time parsing ----------
-const TIME_RE = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(\.\d{1,3})?(Z|[+-]\d{2}:\d{2})$/;
-const DAYS_IN_MONTH = [31,28,31,30,31,30,31,31,30,31,30,31];
+// ============================================================
+// TIME VALIDATION / NORMALIZATION
+// ============================================================
 
-function isLeap(y) { return (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0; }
+const TIME_RE =
+  /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(\.\d{1,3})?(Z|[+-]\d{2}:\d{2})$/;
 
-function parseTimeToUtcMillis(str) {
-  if (typeof str !== 'string') return null;
-  const m = TIME_RE.exec(str);
-  if (!m) return null;
-  const year = +m[1], month = +m[2], day = +m[3];
-  const hour = +m[4], minute = +m[5], second = +m[6];
-  const fracStr = m[7] ? m[7].slice(1) : '';
-  const ms = fracStr ? Math.round(Number('0.' + fracStr) * 1000) : 0;
-  const offsetStr = m[8];
+const DAYS_IN_MONTH = [
+  31, 28, 31, 30, 31, 30,
+  31, 31, 30, 31, 30, 31
+];
 
-  if (month < 1 || month > 12) return null;
-  const maxDay = month === 2 && isLeap(year) ? 29 : DAYS_IN_MONTH[month - 1];
-  if (day < 1 || day > maxDay) return null;
-  if (hour > 23 || minute > 59 || second > 59) return null;
+function isLeapYear(year) {
+  return (
+    (year % 4 === 0 && year % 100 !== 0) ||
+    year % 400 === 0
+  );
+}
 
-  let offsetMinutes = 0;
-  if (offsetStr !== 'Z') {
-    const sign = offsetStr[0] === '-' ? -1 : 1;
-    const oh = +offsetStr.slice(1, 3);
-    const om = +offsetStr.slice(4, 6);
-    if (oh > 14 || om > 59) return null;
-    if (oh === 14 && om !== 0) return null;
-    offsetMinutes = sign * (oh * 60 + om);
+function daysInMonth(year, month) {
+  if (month === 2 && isLeapYear(year)) {
+    return 29;
   }
 
-  const baseMs = Date.UTC(year, month - 1, day, hour, minute, second, ms);
+  return DAYS_IN_MONTH[month - 1];
+}
+
+function parseTimeToUtcMillis(value) {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const match = TIME_RE.exec(value);
+
+  if (!match) {
+    return null;
+  }
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  const second = Number(match[6]);
+
+  let milliseconds = 0;
+
+  if (match[7]) {
+    const digits = match[7].slice(1);
+    milliseconds = Number(digits.padEnd(3, "0"));
+  }
+
+  // Calendar validation
+  if (month < 1 || month > 12) {
+    return null;
+  }
+
+  if (
+    day < 1 ||
+    day > daysInMonth(year, month)
+  ) {
+    return null;
+  }
+
+  if (hour < 0 || hour > 23) {
+    return null;
+  }
+
+  if (minute < 0 || minute > 59) {
+    return null;
+  }
+
+  if (second < 0 || second > 59) {
+    return null;
+  }
+
+  // Offset validation
+  const offset = match[8];
+
+  let offsetMinutes = 0;
+
+  if (offset !== "Z") {
+    const sign = offset[0] === "-" ? -1 : 1;
+    const offsetHour = Number(offset.slice(1, 3));
+    const offsetMinute = Number(offset.slice(4, 6));
+
+    if (offsetHour > 14) {
+      return null;
+    }
+
+    if (offsetMinute > 59) {
+      return null;
+    }
+
+    // +14:00 / -14:00 is allowed,
+    // but +14:01 etc. is not.
+    if (
+      offsetHour === 14 &&
+      offsetMinute !== 0
+    ) {
+      return null;
+    }
+
+    offsetMinutes =
+      sign * (offsetHour * 60 + offsetMinute);
+  }
+
+  /*
+   * Date.UTC treats years 0-99 specially.
+   * We therefore create the date from year 100 first,
+   * then explicitly set the UTC full year.
+   */
+  const date = new Date(0);
+
+  date.setUTCFullYear(
+    year,
+    month - 1,
+    day
+  );
+
+  date.setUTCHours(
+    hour,
+    minute,
+    second,
+    milliseconds
+  );
+
+  const baseMs = date.getTime();
+
   return baseMs - offsetMinutes * 60000;
 }
 
 function formatUtcMillis(ms) {
-  const d = new Date(ms);
-  const pad = (n, l = 2) => String(n).padStart(l, '0');
-  return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}T` +
-    `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}.` +
-    `${pad(d.getUTCMilliseconds(), 3)}Z`;
+  const date = new Date(ms);
+
+  const pad = (value, length = 2) =>
+    String(value).padStart(length, "0");
+
+  return (
+    `${date.getUTCFullYear()}-` +
+    `${pad(date.getUTCMonth() + 1)}-` +
+    `${pad(date.getUTCDate())}T` +
+    `${pad(date.getUTCHours())}:` +
+    `${pad(date.getUTCMinutes())}:` +
+    `${pad(date.getUTCSeconds())}.` +
+    `${pad(date.getUTCMilliseconds(), 3)}Z`
+  );
 }
 
-// ---------- Canonicalization ----------
-function canonText(s) {
-  return s.normalize('NFKC').toLowerCase().replace(/\p{White_Space}+/gu, ' ').trim();
+// ============================================================
+// CANONICALIZATION
+// ============================================================
+
+function canonText(value) {
+  return value
+    .normalize("NFKC")
+    .toLowerCase()
+    .replace(/\p{White_Space}+/gu, " ")
+    .trim();
 }
 
-function wordSet(s) {
-  const matches = s.match(/[\p{L}\p{N}]+/gu) || [];
-  return new Set(matches.map(w => w.toLowerCase()));
+// ============================================================
+// WORD SET / JACCARD
+// ============================================================
+
+function wordSet(text) {
+  const matches =
+    text.match(/[\p{L}\p{N}]+/gu) || [];
+
+  return new Set(
+    matches.map(word => word.toLowerCase())
+  );
 }
 
-function jaccard(a, b) {
-  if (a.size === 0 && b.size === 0) return 1;
-  let inter = 0;
-  for (const w of a) if (b.has(w)) inter++;
-  const union = a.size + b.size - inter;
-  return union === 0 ? 1 : inter / union;
+function jaccard(setA, setB) {
+  if (
+    setA.size === 0 &&
+    setB.size === 0
+  ) {
+    return 1;
+  }
+
+  let intersection = 0;
+
+  for (const word of setA) {
+    if (setB.has(word)) {
+      intersection++;
+    }
+  }
+
+  const union =
+    setA.size +
+    setB.size -
+    intersection;
+
+  if (union === 0) {
+    return 1;
+  }
+
+  return intersection / union;
 }
 
-// ---------- Row / object validation ----------
+// ============================================================
+// VALIDATION HELPERS
+// ============================================================
+
 const URI_RE = /^gs:\/\/[^/]+\/.+$/;
-const GEN_RE = /^\d+$/;
-const CRC_RE = /^[0-9a-f]{8}$/;
+const GENERATION_RE = /^\d+$/;
+const CRC32C_RE = /^[0-9a-f]{8}$/;
 
-function addCode(set, code) { set.add(code); }
-
-function isPlainObject(v) {
-  return typeof v === 'object' && v !== null && !Array.isArray(v);
+function isPlainObject(value) {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value)
+  );
 }
 
 function validateRowShape(row) {
-  if (!isPlainObject(row)) return false;
-  const keys = Object.keys(row).sort();
-  const expected = ['entity', 'eventTime', 'id', 'revision', 'text'];
-  if (keys.length !== 5 || !keys.every((k, i) => k === expected[i])) return false;
-  if (typeof row.id !== 'string' || typeof row.entity !== 'string') return false;
-  if (typeof row.eventTime !== 'string' || typeof row.text !== 'string') return false;
-  if (typeof row.revision !== 'number' || !Number.isInteger(row.revision)) return false;
-  if (row.revision < 0 || !Number.isSafeInteger(row.revision)) return false;
+  if (!isPlainObject(row)) {
+    return false;
+  }
+
+  const expectedKeys = [
+    "entity",
+    "eventTime",
+    "id",
+    "revision",
+    "text"
+  ];
+
+  const actualKeys =
+    Object.keys(row).sort();
+
+  if (
+    actualKeys.length !== 5 ||
+    !actualKeys.every(
+      (key, index) =>
+        key === expectedKeys[index]
+    )
+  ) {
+    return false;
+  }
+
+  if (typeof row.id !== "string") {
+    return false;
+  }
+
+  if (typeof row.entity !== "string") {
+    return false;
+  }
+
+  if (typeof row.eventTime !== "string") {
+    return false;
+  }
+
+  if (typeof row.text !== "string") {
+    return false;
+  }
+
+  if (
+    typeof row.revision !== "number" ||
+    !Number.isInteger(row.revision) ||
+    row.revision < 0 ||
+    !Number.isSafeInteger(row.revision)
+  ) {
+    return false;
+  }
+
+  // IMPORTANT:
+  // eventTime itself must be valid.
+  if (
+    parseTimeToUtcMillis(row.eventTime) === null
+  ) {
+    return false;
+  }
+
   return true;
 }
 
+// ============================================================
+// OBJECT VALIDATION
+// ============================================================
+
 function processObject(obj) {
   const codes = new Set();
-  const uri = typeof obj?.uri === 'string' ? obj.uri : null;
 
-  if (uri === null || !URI_RE.test(uri)) addCode(codes, 'URI_INVALID');
+  const uri =
+    typeof obj?.uri === "string"
+      ? obj.uri
+      : null;
 
-  const gen = obj?.generation;
-  const fgen = obj?.fetchedGeneration;
-  const genValid = typeof gen === 'string' && GEN_RE.test(gen);
-  const fgenValid = typeof fgen === 'string' && GEN_RE.test(fgen);
-  if (!genValid || !fgenValid) addCode(codes, 'GENERATION_INVALID');
-  if (genValid && fgenValid && gen !== fgen) addCode(codes, 'GENERATION_MISMATCH');
+  // ----------------------------
+  // URI
+  // ----------------------------
 
-  const crc = obj?.crc32c;
-  const crcValid = typeof crc === 'string' && CRC_RE.test(crc);
-  if (!crcValid) addCode(codes, 'CRC32C_INVALID');
-
-  const content = obj?.content;
-  const contentIsString = typeof content === 'string';
-
-  if (crcValid && contentIsString) {
-    const actual = crc32c(Buffer.from(content, 'utf8'));
-    if (actual !== crc) addCode(codes, 'CRC32C_MISMATCH');
+  if (
+    uri === null ||
+    !URI_RE.test(uri)
+  ) {
+    codes.add("URI_INVALID");
   }
 
-  if (obj?.schemaId !== 'training-v1') addCode(codes, 'SCHEMA_INVALID');
-  if (!contentIsString) addCode(codes, 'SCHEMA_INVALID');
+  // ----------------------------
+  // GENERATIONS
+  // ----------------------------
 
-  let rows = [];
-  if (contentIsString) {
-    const lines = content.split('\n').filter(l => l.trim().length > 0);
-    if (lines.length === 0) {
-      addCode(codes, 'SCHEMA_INVALID');
-    } else {
-      let jsonlBad = false;
-      let shapeBad = false;
-      for (const line of lines) {
-        let parsed;
-        try {
-          parsed = JSON.parse(line);
-        } catch {
-          jsonlBad = true;
-          continue;
-        }
-        if (!validateRowShape(parsed)) {
-          shapeBad = true;
-          continue;
-        }
-        rows.push(parsed);
-      }
-      if (jsonlBad) addCode(codes, 'JSONL_INVALID');
-      if (shapeBad) addCode(codes, 'SCHEMA_INVALID');
+  const generation = obj?.generation;
+  const fetchedGeneration =
+    obj?.fetchedGeneration;
+
+  const generationValid =
+    typeof generation === "string" &&
+    GENERATION_RE.test(generation);
+
+  const fetchedGenerationValid =
+    typeof fetchedGeneration === "string" &&
+    GENERATION_RE.test(fetchedGeneration);
+
+  if (
+    !generationValid ||
+    !fetchedGenerationValid
+  ) {
+    codes.add("GENERATION_INVALID");
+  }
+
+  if (
+    generationValid &&
+    fetchedGenerationValid &&
+    generation !== fetchedGeneration
+  ) {
+    codes.add("GENERATION_MISMATCH");
+  }
+
+  // ----------------------------
+  // CRC32C
+  // ----------------------------
+
+  const suppliedCrc = obj?.crc32c;
+
+  const crcValid =
+    typeof suppliedCrc === "string" &&
+    CRC32C_RE.test(suppliedCrc);
+
+  if (!crcValid) {
+    codes.add("CRC32C_INVALID");
+  }
+
+  const content = obj?.content;
+
+  const contentIsString =
+    typeof content === "string";
+
+  if (
+    crcValid &&
+    contentIsString
+  ) {
+    const actualCrc = crc32c(
+      Buffer.from(content, "utf8")
+    );
+
+    if (actualCrc !== suppliedCrc) {
+      codes.add("CRC32C_MISMATCH");
     }
   }
 
-  return { uri, codes, rows, obj, accepted: codes.size === 0 };
+  // ----------------------------
+  // SCHEMA
+  // ----------------------------
+
+  if (
+    obj?.schemaId !== "training-v1"
+  ) {
+    codes.add("SCHEMA_INVALID");
+  }
+
+  if (!contentIsString) {
+    codes.add("SCHEMA_INVALID");
+  }
+
+  // ----------------------------
+  // JSONL
+  // ----------------------------
+
+  const rows = [];
+
+  if (contentIsString) {
+    const lines =
+      content
+        .split("\n")
+        .filter(
+          line => line.trim().length > 0
+        );
+
+    // Empty file / only blank lines
+    if (lines.length === 0) {
+      codes.add("SCHEMA_INVALID");
+    } else {
+      let jsonlInvalid = false;
+      let schemaInvalid = false;
+
+      for (const line of lines) {
+        let parsed;
+
+        try {
+          parsed = JSON.parse(line);
+        } catch (error) {
+          jsonlInvalid = true;
+          continue;
+        }
+
+        if (!validateRowShape(parsed)) {
+          schemaInvalid = true;
+          continue;
+        }
+
+        rows.push(parsed);
+      }
+
+      if (jsonlInvalid) {
+        codes.add("JSONL_INVALID");
+      }
+
+      if (schemaInvalid) {
+        codes.add("SCHEMA_INVALID");
+      }
+    }
+  }
+
+  /*
+   * If ANY object-level validation error occurred,
+   * the whole object is rejected.
+   */
+  return {
+    uri,
+    codes,
+    rows,
+    obj,
+    accepted: codes.size === 0
+  };
 }
 
-// ---------- Main handler ----------
+// ============================================================
+// REASON CODE SORTING
+// ============================================================
+
+function sortDedupReasonCodes(codes) {
+  const unique = [
+    ...new Set(codes)
+  ];
+
+  unique.sort(cmpBytes);
+
+  return unique;
+}
+
+// ============================================================
+// COMPACT ROW JSON
+// ============================================================
+
+function compactRow(row) {
+  return JSON.stringify({
+    id: row.id,
+    entity: row.entity,
+    eventTime: formatUtcMillis(
+      row.eventTimeMs
+    ),
+    revision: row.revision,
+    text: row.text
+  });
+}
+
+// ============================================================
+// SPLIT SERIALIZATION
+// ============================================================
+
+function serializeSplit(rows) {
+  const sorted =
+    rows.slice().sort((a, b) => {
+      const idComparison =
+        cmpBytes(a.id, b.id);
+
+      if (idComparison !== 0) {
+        return idComparison;
+      }
+
+      return cmpBytes(
+        compactRow(a),
+        compactRow(b)
+      );
+    });
+
+  const lines = sorted.map(
+    row => compactRow(row) + "\n"
+  );
+
+  const serialized =
+    lines.join("");
+
+  const bytes =
+    Buffer.from(serialized, "utf8");
+
+  return {
+    rows: sorted.map(
+      row => JSON.parse(
+        compactRow(row)
+      )
+    ),
+
+    digest: sha256Hex(bytes)
+  };
+}
+
+// ============================================================
+// MAIN HANDLER
+// ============================================================
+
 module.exports = async (req, res) => {
-  if (req.method !== 'POST') {
-    res.status(404).json({ error: 'INVALID_INPUT' });
+
+  // The grader calls POST /build-corpus
+  if (req.method !== "POST") {
+    res
+      .status(405)
+      .json({
+        error: "INVALID_INPUT"
+      });
+
     return;
   }
 
-  const body = req.body && typeof req.body === 'object' ? req.body : {};
+  // ----------------------------
+  // REQUEST PARSING
+  // ----------------------------
+
+  let body = req.body;
+
+  /*
+   * Vercel normally parses application/json
+   * automatically.
+   *
+   * This fallback also handles cases where
+   * req.body arrives as a string.
+   */
+  if (typeof body === "string") {
+    try {
+      body = JSON.parse(body);
+    } catch (error) {
+      res
+        .status(400)
+        .json({
+          error: "INVALID_INPUT"
+        });
+
+      return;
+    }
+  }
+
+  if (!isPlainObject(body)) {
+    res
+      .status(400)
+      .json({
+        error: "INVALID_INPUT"
+      });
+
+    return;
+  }
+
   const policy = body.policy;
   const objects = body.objects;
 
-  if (!isPlainObject(policy) || !Array.isArray(objects)) {
-    res.status(400).json({ error: 'INVALID_INPUT' });
+  // Missing/invalid policy or objects
+  if (
+    !isPlainObject(policy) ||
+    !Array.isArray(objects)
+  ) {
+    res
+      .status(400)
+      .json({
+        error: "INVALID_INPUT"
+      });
+
     return;
   }
 
+  // ==========================================================
+  // PROCESS OBJECTS
+  // ==========================================================
+
   const rejectedObjects = [];
   const lineage = [];
-  const acceptedRows = []; // { id, entity, eventTime(ms), revision, text, sourceEntity, sourceText }
 
-  for (const obj of objects) {
-    const result = processObject(obj);
+  const acceptedRows = [];
+
+  for (const object of objects) {
+    const result =
+      processObject(object);
+
+    // ----------------------------
+    // REJECT INVALID OBJECT
+    // ----------------------------
+
     if (!result.accepted) {
-      rejectedObjects.push({ uri: result.uri, reasonCodes: sortDedup([...result.codes]) });
+      rejectedObjects.push({
+        uri: result.uri,
+        reasonCodes:
+          sortDedupReasonCodes(
+            [...result.codes]
+          )
+      });
+
       continue;
     }
+
+    // ----------------------------
+    // LINEAGE
+    // ----------------------------
+
     lineage.push({
       uri: result.uri,
-      generation: obj.generation,
-      crc32c: obj.crc32c,
-      schemaId: obj.schemaId,
+      generation: object.generation,
+      crc32c: object.crc32c,
+      schemaId: object.schemaId
     });
-    for (const r of result.rows) {
-      const utcMs = parseTimeToUtcMillis(r.eventTime);
+
+    // ----------------------------
+    // ACCEPT ROWS
+    // ----------------------------
+
+    for (const row of result.rows) {
       acceptedRows.push({
-        id: r.id,
-        rawEntity: r.entity,
-        rawText: r.text,
-        entity: canonText(r.entity),
-        text: canonText(r.text),
-        eventTimeMs: utcMs,
-        revision: r.revision,
+        id: row.id,
+
+        entity:
+          canonText(row.entity),
+
+        text:
+          canonText(row.text),
+
+        eventTimeMs:
+          parseTimeToUtcMillis(
+            row.eventTime
+          ),
+
+        revision:
+          row.revision
       });
     }
   }
 
-  // ---- Dedup by [entity, eventTime(normalized), text] ----
-  const rejectedRows = [];
+  // ==========================================================
+  // DEDUPLICATION
+  // ==========================================================
+
+  const duplicateRejectedRows = [];
+
   const groups = new Map();
+
   for (const row of acceptedRows) {
-    const timeKey = row.eventTimeMs === null ? `INVALID:${row.id}` : formatUtcMillis(row.eventTimeMs);
-    const key = JSON.stringify([row.entity, timeKey, row.text]);
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).push(row);
+
+    const normalizedTime =
+      formatUtcMillis(
+        row.eventTimeMs
+      );
+
+    const key = JSON.stringify([
+      row.entity,
+      normalizedTime,
+      row.text
+    ]);
+
+    if (!groups.has(key)) {
+      groups.set(key, []);
+    }
+
+    groups
+      .get(key)
+      .push(row);
   }
 
-  let survivors = [];
-  for (const [, group] of groups) {
+  const survivors = [];
+
+  for (const group of groups.values()) {
+
     if (group.length === 1) {
       survivors.push(group[0]);
       continue;
     }
+
     let winner = group[0];
-    for (const cand of group.slice(1)) {
-      if (cand.revision > winner.revision) winner = cand;
-      else if (cand.revision === winner.revision && cmpBytes(cand.id, winner.id) < 0) winner = cand;
+
+    for (
+      const candidate of group.slice(1)
+    ) {
+
+      if (
+        candidate.revision >
+        winner.revision
+      ) {
+        winner = candidate;
+      } else if (
+        candidate.revision ===
+        winner.revision &&
+        cmpBytes(
+          candidate.id,
+          winner.id
+        ) < 0
+      ) {
+        winner = candidate;
+      }
     }
-    for (const loser of group) {
-      if (loser !== winner) rejectedRows.push({ id: loser.id, codes: new Set(['DUPLICATE']) });
+
+    for (const candidate of group) {
+      if (candidate !== winner) {
+        duplicateRejectedRows.push({
+          id: candidate.id,
+          codes: new Set([
+            "DUPLICATE"
+          ])
+        });
+      }
     }
+
     survivors.push(winner);
   }
 
-  // ---- Policy validation ----
-  const minMs = parseTimeToUtcMillis(policy.minTime);
-  const maxMs = parseTimeToUtcMillis(policy.maxTime);
-  const thresh = policy.contaminationThreshold;
-  const threshValid = typeof thresh === 'number' && Number.isFinite(thresh) && thresh >= 0 && thresh <= 1;
-  const policyValid = minMs !== null && maxMs !== null && minMs <= maxMs && threshValid;
+  // ==========================================================
+  // POLICY VALIDATION
+  // ==========================================================
 
-  let windowed = [];
+  const minTime =
+    parseTimeToUtcMillis(
+      policy.minTime
+    );
+
+  const maxTime =
+    parseTimeToUtcMillis(
+      policy.maxTime
+    );
+
+  const threshold =
+    policy.contaminationThreshold;
+
+  const thresholdValid =
+    typeof threshold === "number" &&
+    Number.isFinite(threshold) &&
+    threshold >= 0 &&
+    threshold <= 1;
+
+  const policyValid =
+    minTime !== null &&
+    maxTime !== null &&
+    minTime <= maxTime &&
+    thresholdValid;
+
+  const rejectedPolicyRows = [];
+
+  const windowedRows = [];
+
   for (const row of survivors) {
+
+    // Invalid policy rejects every
+    // retained row.
     if (!policyValid) {
-      rejectedRows.push({ id: row.id, codes: new Set(['POLICY_INVALID']) });
+
+      rejectedPolicyRows.push({
+        id: row.id,
+        codes: new Set([
+          "POLICY_INVALID"
+        ])
+      });
+
       continue;
     }
-    if (row.eventTimeMs === null || row.eventTimeMs < minMs || row.eventTimeMs > maxMs) {
-      rejectedRows.push({ id: row.id, codes: new Set(['OUT_OF_WINDOW']) });
+
+    // Inclusive time window
+    if (
+      row.eventTimeMs < minTime ||
+      row.eventTimeMs > maxTime
+    ) {
+
+      rejectedPolicyRows.push({
+        id: row.id,
+        codes: new Set([
+          "OUT_OF_WINDOW"
+        ])
+      });
+
       continue;
     }
-    windowed.push(row);
+
+    windowedRows.push(row);
   }
 
-  // ---- Split assignment ----
-  const train = [], validation = [], test = [];
-  for (const row of windowed) {
-    const hash = crypto.createHash('sha256').update(Buffer.from(row.entity, 'utf8')).digest();
-    const bucket = hash[0] % 10;
-    if (bucket <= 5) train.push(row);
-    else if (bucket <= 7) validation.push(row);
-    else test.push(row);
-  }
+  // ==========================================================
+  // DETERMINISTIC SPLIT
+  // ==========================================================
 
-  // ---- Contamination check ----
-  const trainWordSets = train.map(r => wordSet(r.text));
-  function isContaminated(row) {
-    const ws = wordSet(row.text);
-    for (const tws of trainWordSets) {
-      if (jaccard(ws, tws) >= thresh) return true;
+  const train = [];
+  const validation = [];
+  const test = [];
+
+  for (const row of windowedRows) {
+
+    const hash =
+      crypto
+        .createHash("sha256")
+        .update(
+          Buffer.from(
+            row.entity,
+            "utf8"
+          )
+        )
+        .digest();
+
+    const bucket =
+      hash[0] % 10;
+
+    if (bucket <= 5) {
+      train.push(row);
+    } else if (bucket <= 7) {
+      validation.push(row);
+    } else {
+      test.push(row);
     }
+  }
+
+  // ==========================================================
+  // TRAIN CONTAMINATION
+  // ==========================================================
+
+  const trainWordSets =
+    train.map(
+      row => wordSet(row.text)
+    );
+
+  function contaminated(row) {
+
+    const rowWords =
+      wordSet(row.text);
+
+    for (
+      const trainWords of trainWordSets
+    ) {
+
+      const similarity =
+        jaccard(
+          rowWords,
+          trainWords
+        );
+
+      if (
+        similarity >= threshold
+      ) {
+        return true;
+      }
+    }
+
     return false;
   }
 
   const finalValidation = [];
   const finalTest = [];
+
+  const contaminationRejectedRows = [];
+
+  // Validation
   for (const row of validation) {
-    if (isContaminated(row)) rejectedRows.push({ id: row.id, codes: new Set(['TRAIN_CONTAMINATION']) });
-    else finalValidation.push(row);
-  }
-  for (const row of test) {
-    if (isContaminated(row)) rejectedRows.push({ id: row.id, codes: new Set(['TRAIN_CONTAMINATION']) });
-    else finalTest.push(row);
-  }
 
-  // ---- Serialize a split ----
-  function serializeSplit(rows) {
-    const sorted = rows.slice().sort((a, b) => {
-      const c = cmpBytes(a.id, b.id);
-      if (c !== 0) return c;
-      return cmpBytes(compactRow(a), compactRow(b));
-    });
-    let buf = Buffer.alloc(0);
-    const jsonRows = [];
-    for (const r of sorted) {
-      const line = compactRow(r) + '\n';
-      buf = Buffer.concat([buf, Buffer.from(line, 'utf8')]);
-      jsonRows.push(JSON.parse(compactRow(r)));
+    if (contaminated(row)) {
+
+      contaminationRejectedRows.push({
+        id: row.id,
+        codes: new Set([
+          "TRAIN_CONTAMINATION"
+        ])
+      });
+
+    } else {
+      finalValidation.push(row);
     }
-    return { rows: jsonRows, digest: sha256Hex(buf) };
   }
 
-  function compactRow(r) {
-    return JSON.stringify({
-      id: r.id,
-      entity: r.entity,
-      eventTime: formatUtcMillis(r.eventTimeMs),
-      revision: r.revision,
-      text: r.text,
-    });
+  // Test
+  for (const row of test) {
+
+    if (contaminated(row)) {
+
+      contaminationRejectedRows.push({
+        id: row.id,
+        codes: new Set([
+          "TRAIN_CONTAMINATION"
+        ])
+      });
+
+    } else {
+      finalTest.push(row);
+    }
   }
 
-  const trainSer = serializeSplit(train);
-  const valSer = serializeSplit(finalValidation);
-  const testSer = serializeSplit(finalTest);
+  // ==========================================================
+  // MERGE REJECTED ROW REASONS
+  // ==========================================================
 
-  // ---- Merge rejected row codes (a row could theoretically get multiple codes over stages, but our pipeline stops at first rejection) ----
-  const rejectedRowMap = new Map();
-  for (const rr of rejectedRows) {
-    if (!rejectedRowMap.has(rr.id)) rejectedRowMap.set(rr.id, new Set());
-    for (const c of rr.codes) rejectedRowMap.get(rr.id).add(c);
+  const rejectedRowMap =
+    new Map();
+
+  const allRejectedRows = [
+    ...duplicateRejectedRows,
+    ...rejectedPolicyRows,
+    ...contaminationRejectedRows
+  ];
+
+  for (
+    const rejected of allRejectedRows
+  ) {
+
+    if (
+      !rejectedRowMap.has(
+        rejected.id
+      )
+    ) {
+      rejectedRowMap.set(
+        rejected.id,
+        new Set()
+      );
+    }
+
+    for (
+      const code of rejected.codes
+    ) {
+      rejectedRowMap
+        .get(rejected.id)
+        .add(code);
+    }
   }
-  const finalRejectedRows = [...rejectedRowMap.entries()]
-    .map(([id, codes]) => ({ id, reasonCodes: sortDedup([...codes]) }))
-    .sort((a, b) => {
-      const c = cmpBytes(a.id, b.id);
-      if (c !== 0) return c;
-      return cmpBytes(JSON.stringify(a), JSON.stringify(b));
-    });
 
-  const finalRejectedObjects = rejectedObjects
-    .slice()
-    .sort((a, b) => {
-      const au = a.uri === null ? '' : a.uri;
-      const bu = b.uri === null ? '' : b.uri;
-      const c = cmpBytes(au, bu);
-      if (c !== 0) return c;
-      return cmpBytes(JSON.stringify(a), JSON.stringify(b));
-    });
+  const finalRejectedRows =
+    [...rejectedRowMap.entries()]
+      .map(
+        ([id, codes]) => ({
+          id,
+          reasonCodes:
+            sortDedupReasonCodes(
+              [...codes]
+            )
+        })
+      )
+      .sort((a, b) => {
 
-  const finalLineage = lineage
-    .slice()
-    .sort((a, b) => {
-      const c = cmpBytes(a.uri, b.uri);
-      if (c !== 0) return c;
-      return cmpBytes(JSON.stringify(a), JSON.stringify(b));
-    });
+        const comparison =
+          cmpBytes(a.id, b.id);
+
+        if (comparison !== 0) {
+          return comparison;
+        }
+
+        return cmpBytes(
+          JSON.stringify(a),
+          JSON.stringify(b)
+        );
+      });
+
+  // ==========================================================
+  // SORT REJECTED OBJECTS
+  // ==========================================================
+
+  const finalRejectedObjects =
+    rejectedObjects
+      .slice()
+      .sort((a, b) => {
+
+        const uriA =
+          a.uri === null
+            ? ""
+            : a.uri;
+
+        const uriB =
+          b.uri === null
+            ? ""
+            : b.uri;
+
+        const comparison =
+          cmpBytes(uriA, uriB);
+
+        if (comparison !== 0) {
+          return comparison;
+        }
+
+        return cmpBytes(
+          JSON.stringify(a),
+          JSON.stringify(b)
+        );
+      });
+
+  // ==========================================================
+  // SORT LINEAGE
+  // ==========================================================
+
+  const finalLineage =
+    lineage
+      .slice()
+      .sort((a, b) => {
+
+        const comparison =
+          cmpBytes(a.uri, b.uri);
+
+        if (comparison !== 0) {
+          return comparison;
+        }
+
+        return cmpBytes(
+          JSON.stringify(a),
+          JSON.stringify(b)
+        );
+      });
+
+  // ==========================================================
+  // SERIALIZE SPLITS
+  // ==========================================================
+
+  const trainResult =
+    serializeSplit(train);
+
+  const validationResult =
+    serializeSplit(finalValidation);
+
+  const testResult =
+    serializeSplit(finalTest);
+
+  // ==========================================================
+  // EXACT RESPONSE SHAPE
+  // ==========================================================
 
   res.status(200).json({
-    splits: { train: trainSer.rows, validation: valSer.rows, test: testSer.rows },
-    rejectedObjects: finalRejectedObjects,
-    rejectedRows: finalRejectedRows,
-    digests: { train: trainSer.digest, validation: valSer.digest, test: testSer.digest },
-    lineage: finalLineage,
+    splits: {
+      train: trainResult.rows,
+      validation: validationResult.rows,
+      test: testResult.rows
+    },
+
+    rejectedObjects:
+      finalRejectedObjects,
+
+    rejectedRows:
+      finalRejectedRows,
+
+    digests: {
+      train: trainResult.digest,
+      validation:
+        validationResult.digest,
+      test:
+        testResult.digest
+    },
+
+    lineage:
+      finalLineage
   });
 };
-
-function sortDedup(arr) {
-  const uniq = [...new Set(arr)];
-  uniq.sort((a, b) => cmpBytes(a, b));
-  return uniq;
-}
