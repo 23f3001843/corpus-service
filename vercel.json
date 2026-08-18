@@ -1,0 +1,7 @@
+{
+  "functions": {
+    "api/build-corpus.js": {
+      "memory": 1024
+    }
+  }
+}
